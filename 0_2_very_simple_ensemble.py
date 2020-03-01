@@ -11,10 +11,16 @@ from tensorflow.keras.preprocessing import image
 from tensorflow.keras.applications.vgg16 import VGG16
 from tensorflow.keras.applications.vgg16 import preprocess_input
 
-from sklearn.cluster import KMeans
+from sklearn.ensemble import VotingClassifier
 from sklearn.preprocessing import LabelEncoder
 
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.tree import DecisionTreeClassifier
+
 import numpy as np
+
 
 # ***************************
 # collection of cat/dog breeds, separated in directories (200 images each)
@@ -25,13 +31,11 @@ import numpy as np
 # https://www.kaggle.com/zippyz/cats-and-dogs-breeds-classification-oxford-dataset
 # You have to assign the images to directories by yourself (see: annotations/list.txt)
 # ***************************
-SHAPE = (75, 75, 3)
-MODEL_PATH = "models/0_1"
-DATA_BASEPATH = "../../data/images/cats_dogs_breeds"  
+SHAPE = (100, 100, 3)
+MODEL_PATH = "models/0_2"
+DATA_BASEPATH = "../data/images/cats_dogs_breeds"  
 SUBDIRS = os.listdir(DATA_BASEPATH)
 
-# if you like to cluster by species instead of breeds (= k)
-CATS_OR_DOGS_K = 2  
 
 # ***************************
 # Use pretrained VGG16 model
@@ -54,12 +58,9 @@ def get_data(start=0, end=10):
     file_names_in = []
     file_classes = []  # the subdir name i.e. C7-Maine_coon
 
-    k = 0  # classes correspond with num breed dirs: increase k in subdir loop
-   
     for subdir in SUBDIRS:
         try:
             file_names = os.listdir(f"{DATA_BASEPATH}/{subdir}")
-            k += 1  # increment cluster num
             
             for file_name in file_names[start:end]:
                 image_path = f"{DATA_BASEPATH}/{subdir}/{file_name}"
@@ -90,7 +91,7 @@ def get_data(start=0, end=10):
             continue
 
     feature_list = np.array(feature_list)
-    return feature_list, file_paths_in, file_names_in, file_classes, k
+    return feature_list, file_paths_in, file_names_in, file_classes
 
 
 # **************************************
@@ -98,11 +99,9 @@ def get_data(start=0, end=10):
 # file-names / -paths are not needed
 # **************************************
 def train(start=0, end=50, train_breeds=False, model_name="test"):
-    X_train, _, _, y_train, k = get_data(start=start, end=end)  
+    X_train, _, _, y_train = get_data(start=start, end=end)  
 
-    current_k = k  # incremented k for single breeds 
     if train_breeds is False:
-        current_k = CATS_OR_DOGS_K  # or k = 2 for cats/dogs
         y_train = [x[0] for x in y_train]  # i.e. D9-German_shorthaired -> D
     
     label_encoder = LabelEncoder()
@@ -110,13 +109,21 @@ def train(start=0, end=50, train_breeds=False, model_name="test"):
     y_train = label_encoder.transform(y_train)
     
     # ***********
-    # k-means classifier without any hyperparameter tuning
-    # fit and save model / label encoder
+    # train models
+    models = []
+    clf_name = ["MultinomialNB", "LogisticRegression", "RandomForestClassifier", "DecisionTreeClassifier"]
+    for i, clf in enumerate([MultinomialNB, LogisticRegression, RandomForestClassifier, DecisionTreeClassifier]):
+        print(f"[INFO] train {clf_name[i]}")
+        model = clf().fit(X_train, y_train)
+        models.append((clf_name[i], model))
+        
     # ***********
-    model_clf = KMeans(n_clusters=current_k, random_state=0)
-    model_clf.fit(X_train, y_train)
-
-    pickle.dump(model_clf, open(f"{MODEL_PATH}/{model_name}.pkl", 'wb'))
+    # make ensemble
+    print(f"[INFO] make voting classifier")
+    ensemble_model = VotingClassifier(estimators=models, voting='soft') #, weights=[4, 1, 1, 5, 1])
+    ensemble_model.fit(X_train, y_train)
+    
+    pickle.dump(ensemble_model, open(f"{MODEL_PATH}/{model_name}.pkl", 'wb'))
     pickle.dump(label_encoder, open(f"{MODEL_PATH}/{model_name}_label_encoder.pkl", 'wb'))
 
     
@@ -127,8 +134,8 @@ def predict(start=0, end=50, train_breeds=False, model_name="test"):
     model_clf = pickle.load(open(f"{MODEL_PATH}/{model_name}.pkl", 'rb'))
     label_encoder = pickle.load(open(f"{MODEL_PATH}/{model_name}_label_encoder.pkl", 'rb'))
 
-    # get test data (file-paths / -names and k are not needed here)
-    X_test, _, _, y_test, _ = get_data(start=start, end=end)
+    # get test data (file-paths / -names are not needed here)
+    X_test, _, _, y_test = get_data(start=start, end=end)
 
     if train_breeds is False:
         y_test = [x[0] for x in y_test]
@@ -145,6 +152,7 @@ def predict(start=0, end=50, train_breeds=False, model_name="test"):
     perc_correct = round(correct_predictions/len(predictions), 2)
     perc_incorrect = round(1.0 - perc_correct, 2)
     
+    print("[RESULTS]")
     print(f"All predictions: {len(predictions)}")
     print(f"Correct: {correct_predictions} - %: {perc_correct}")
     print(f"Incorrect: {len(predictions) - correct_predictions} - %: {perc_incorrect}")
